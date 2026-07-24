@@ -1,0 +1,75 @@
+# --- General ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.log
+
+# --- Android ---
+# Gradle
+android/.gradle/
+android/build/
+android/*/build/
+
+# Local configuration file (sdk path, etc)
+android/local.properties
+
+# Log Files
+android/*.log
+
+# Android Studio Navigation editor temp files
+android/.navigation/
+
+# Captures
+android/captures/
+
+# Keystore files
+# Uncomment if you have keystore files
+# *.jks
+# *.keystore
+
+# --- Windows (Python) ---
+# Byte-compiled / optimized / DLL files
+windows/__pycache__/
+windows/*.py[cod]
+windows/*$py.class
+windows/**/*.pyc
+
+# Distribution / packaging
+windows/.Python
+windows/build/
+windows/dist/
+windows/downloads/
+windows/eggs/
+windows/.eggs/
+windows/lib/
+windows/lib64/
+windows/parts/
+windows/sdist/
+windows/var/
+windows/wheels/
+windows/pip-wheel-metadata/
+windows/share/python-wheels/
+windows/*.egg-info/
+windows/.installed.cfg
+windows/*.egg
+windows/MANIFEST
+
+# Environments
+windows/.env
+windows/.venv
+windows/env/
+windows/venv/
+windows/ENV/
+
+# Installer build specific
+windows/*.exe
+
+# Root level debug APKs built during development
+*.apk
+testlog*.txt
+# Local Toolchains
+android-sdk/
+jdk17/
+gradle_install/
+
