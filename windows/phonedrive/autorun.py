@@ -13,7 +13,12 @@ def get_exe_path() -> str:
     else:
         # Running as script
         script = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'main.py'))
-        return f'"{sys.executable}" "{script}" --background'
+        python_exe = sys.executable
+        if python_exe.lower().endswith("python.exe"):
+            pythonw = os.path.join(os.path.dirname(python_exe), "pythonw.exe")
+            if os.path.exists(pythonw):
+                python_exe = pythonw
+        return f'"{python_exe}" "{script}" --background'
 
 def add_to_startup(background: bool = True) -> bool:
     """Add PhoneDrive to Windows startup."""
