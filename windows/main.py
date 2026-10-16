@@ -10,6 +10,8 @@ def main():
     parser.add_argument("--no-startup", action="store_true",
                         help="Remove PhoneDrive from Windows startup")
     args = parser.parse_args()
+    from phonedrive.logging_setup import configure_logging
+    configure_logging()
 
     if args.startup:
         from phonedrive.autorun import add_to_startup

@@ -3,67 +3,63 @@ package com.phonedrive.viewmodel
 import android.app.Application
 import android.content.Context
 import android.content.Intent
-import android.os.Build
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import com.phonedrive.service.ServerSettings
 import com.phonedrive.service.SftpServerService
-import kotlinx.coroutines.flow.StateFlow
-import com.phonedrive.service.ServiceState
-import java.security.SecureRandom
 
 class ServerViewModel(application: Application) : AndroidViewModel(application) {
-
+    private val settings = ServerSettings(application)
+    private var config by mutableStateOf(settings.initialize())
     private val prefs = application.getSharedPreferences("ServerPrefs", Context.MODE_PRIVATE)
-
-    val serviceState: StateFlow<ServiceState> = SftpServerService.serviceState
+    private val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        runCatching { settings.read() }.onSuccess { config = it }
+    }
+    init { prefs.registerOnSharedPreferenceChangeListener(listener) }
+    override fun onCleared() {
+        prefs.unregisterOnSharedPreferenceChangeListener(listener)
+        super.onCleared()
+    }
+    val serviceState = SftpServerService.serviceState
+    private val busy get() = serviceState.value.isRunning || serviceState.value.isStarting
 
     var port: Int
-        get() = prefs.getInt("port", 2222)
-        set(value) = prefs.edit().putInt("port", value).apply()
+        get() = config.port
+        set(value) {
+            if (!busy && value in 1..65535) {
+                config = config.copy(port = value)
+                settings.save(config)
+            }
+        }
 
     var username: String
-        get() = prefs.getString("username", "phone") ?: "phone"
-        set(value) = prefs.edit().putString("username", value).apply()
-
-    var password: String
-        get() {
-            var pwd = prefs.getString("password", null)
-            if (pwd == null) {
-                pwd = generatePassword()
-                prefs.edit().putString("password", pwd).apply()
+        get() = config.username
+        set(value) {
+            if (!busy && value.isNotBlank() && value.none { it in "\\/@!\r\n" }) {
+                config = config.copy(username = value)
+                settings.save(config)
             }
-            return pwd
         }
-        set(value) = prefs.edit().putString("password", value).apply()
+
+    val password: String get() = config.password
 
     fun regeneratePassword() {
-        password = generatePassword()
-    }
-
-    private fun generatePassword(): String {
-        val chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        val random = SecureRandom()
-        val sb = StringBuilder(8)
-        for (i in 0 until 8) {
-            sb.append(chars[random.nextInt(chars.length)])
+        if (!busy) {
+            config = config.copy(password = ServerSettings.generatePassword())
+            settings.save(config)
         }
-        return sb.toString()
     }
 
     fun startServer(context: Context) {
-        val intent = Intent(context, SftpServerService::class.java).apply {
-            putExtra(SftpServerService.EXTRA_PORT, port)
-            putExtra(SftpServerService.EXTRA_USERNAME, username)
-            putExtra(SftpServerService.EXTRA_PASSWORD, password)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
-        }
+        config = settings.read()
+        settings.requestedRunning = true
+        context.startForegroundService(Intent(context, SftpServerService::class.java))
     }
 
     fun stopServer(context: Context) {
-        val intent = Intent(context, SftpServerService::class.java)
-        context.stopService(intent)
+        settings.requestedRunning = false
+        context.stopService(Intent(context, SftpServerService::class.java))
     }
 }

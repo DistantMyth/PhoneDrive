@@ -40,6 +40,8 @@ fun MainScreen(
 ) {
     val context = LocalContext.current
     val serviceState by viewModel.serviceState.collectAsState()
+    val busy = serviceState.isRunning || serviceState.isStarting
+    val displayedPassword = if (busy) serviceState.password else viewModel.password
     val snackbarHostState = remember { SnackbarHostState() }
     
     Scaffold(
@@ -81,7 +83,7 @@ fun MainScreen(
                     .clip(CircleShape)
                     .background(buttonColor)
                     .clickable {
-                        if (serviceState.isRunning) {
+                        if (busy) {
                             viewModel.stopServer(context)
                         } else {
                             viewModel.startServer(context)
@@ -122,7 +124,7 @@ fun MainScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (serviceState.isRunning) "Server Running" else "Server Stopped",
+                            text = if (serviceState.isStarting) "Starting Server" else if (serviceState.isRunning) "Server Running" else "Server Stopped",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -140,14 +142,14 @@ fun MainScreen(
 
                     InfoRow(
                         label = "Port",
-                        value = viewModel.port.toString()
+                        value = (if (busy) serviceState.port else viewModel.port).toString()
                     )
                     
                     InfoRow(
                         label = "Username",
-                        value = viewModel.username,
+                        value = if (busy) serviceState.username else viewModel.username,
                         showCopy = true,
-                        onCopy = { copyToClipboard(context, viewModel.username, snackbarHostState) }
+                        onCopy = { copyToClipboard(context, if (busy) serviceState.username else viewModel.username, snackbarHostState) }
                     )
 
                     var passwordVisible by remember { mutableStateOf(false) }
@@ -162,7 +164,7 @@ fun MainScreen(
                         Column {
                             Text("Password", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(
-                                text = if (passwordVisible) viewModel.password else "••••••••",
+                                text = if (passwordVisible) displayedPassword else "••••••••",
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = FontWeight.Medium
                             )
@@ -174,13 +176,13 @@ fun MainScreen(
                                     contentDescription = "Toggle Password Visibility"
                                 )
                             }
-                            IconButton(onClick = { 
+                            IconButton(enabled = !busy, onClick = {
                                 viewModel.regeneratePassword()
                                 passwordVisible = true
                             }) {
                                 Icon(Icons.Default.Refresh, contentDescription = "Regenerate Password")
                             }
-                            IconButton(onClick = { copyToClipboard(context, viewModel.password, snackbarHostState) }) {
+                            IconButton(onClick = { copyToClipboard(context, displayedPassword, snackbarHostState) }) {
                                 Icon(Icons.Default.ContentCopy, contentDescription = "Copy Password")
                             }
                         }
@@ -191,6 +193,15 @@ fun MainScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             // Connected Clients Card
+            serviceState.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            if (busy) {
+                Text(serviceState.discoveryStatus, style = MaterialTheme.typography.bodySmall)
+                if (!serviceState.batteryExempt) {
+                    TextButton(onClick = {
+                        context.startActivity(android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    }) { Text("Allow background operation in battery settings") }
+                }
+            }
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),

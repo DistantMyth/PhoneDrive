@@ -20,6 +20,8 @@ fun SettingsScreen(
 ) {
     var port by remember { mutableStateOf(viewModel.port.toString()) }
     var username by remember { mutableStateOf(viewModel.username) }
+    val state by viewModel.serviceState.collectAsState()
+    val editable = !state.isRunning && !state.isStarting
 
     Scaffold(
         topBar = {
@@ -47,6 +49,7 @@ fun SettingsScreen(
             )
 
             OutlinedTextField(
+                enabled = editable,
                 value = port,
                 onValueChange = { 
                     port = it
@@ -60,6 +63,7 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
+                enabled = editable,
                 value = username,
                 onValueChange = { 
                     username = it
@@ -78,7 +82,8 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            Text("PhoneDrive v1.0", style = MaterialTheme.typography.bodyLarge)
+            if (!editable) Text("Stop the server before changing its port, username, or password.")
+            Text("PhoneDrive v${com.phonedrive.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyLarge)
             Text("SFTP Server for Android", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

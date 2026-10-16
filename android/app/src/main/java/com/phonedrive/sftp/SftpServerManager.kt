@@ -7,28 +7,32 @@ import org.apache.sshd.server.auth.password.PasswordAuthenticator
 import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider
 import org.apache.sshd.sftp.server.SftpSubsystemFactory
 import java.io.File
-import java.nio.file.Paths
+import com.phonedrive.service.ServerConfig
+import org.apache.sshd.common.session.Session
+import org.apache.sshd.common.session.SessionListener
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
 
 class SftpServerManager {
 
     private var sshd: SshServer? = null
-    private val activeSessions = AtomicInteger(0)
+    private val activeSessions = ConcurrentHashMap.newKeySet<Session>()
+    private var sessionPolicy: SshSessionPolicy? = null
     private val _connectionCount = MutableStateFlow(0)
     val connectionCount: StateFlow<Int> = _connectionCount.asStateFlow()
 
     @Synchronized
     fun start(port: Int, username: String, password: String, filesDir: File) {
+        ServerConfig(port, username, password) // Fail closed even for non-UI callers.
         if (sshd != null) return
 
         try {
             sshd = SshServer.setUpDefaultServer()
             sshd?.port = port
 
-            // Host key setup (ED25519)
+            // Keep the existing host key stable across service/process restarts.
             val hostKeyFile = File(filesDir, "hostkey.ser")
             sshd?.keyPairProvider = SimpleGeneratorHostKeyProvider(hostKeyFile.toPath())
 
@@ -44,21 +48,28 @@ class SftpServerManager {
             // Enable SFTP subsystem
             val sftpFactory = SftpSubsystemFactory.Builder().build()
             sshd?.subsystemFactories = listOf(sftpFactory)
+            sessionPolicy = SshSessionPolicy(onUnresponsive = {
+                Log.w(TAG, "Closing unresponsive SSH peer ${it.remoteAddress}")
+            }).also { it.install(requireNotNull(sshd)) }
 
             // Listener to update connection count
             sshd?.addSessionListener(object : org.apache.sshd.common.session.SessionListener {
-                override fun sessionCreated(session: org.apache.sshd.common.session.Session?) {
-                    _connectionCount.value = activeSessions.incrementAndGet()
+                override fun sessionEvent(session: Session, event: SessionListener.Event) {
+                    if (event == SessionListener.Event.Authenticated) {
+                        activeSessions.add(session)
+                        _connectionCount.value = activeSessions.size
+                        Log.i(TAG, "SSH client authenticated: ${session.remoteAddress}")
+                    }
                 }
 
-                override fun sessionClosed(session: org.apache.sshd.common.session.Session?) {
-                    val count = activeSessions.decrementAndGet()
-                    _connectionCount.value = if (count < 0) {
-                        activeSessions.set(0)
-                        0
-                    } else {
-                        count
-                    }
+                override fun sessionClosed(session: Session) {
+                    activeSessions.remove(session)
+                    _connectionCount.value = activeSessions.size
+                    Log.i(TAG, "SSH session closed: ${session.remoteAddress}; timeout=${session.timeoutStatus}")
+                }
+
+                override fun sessionException(session: Session, error: Throwable) {
+                    Log.w(TAG, "SSH session failed: ${session.remoteAddress}", error)
                 }
             })
 
@@ -74,13 +85,16 @@ class SftpServerManager {
     @Synchronized
     fun stop() {
         try {
+            sessionPolicy?.close()
             sshd?.stop(true)
-            sshd = null
-            activeSessions.set(0)
-            _connectionCount.value = 0
             Log.d(TAG, "SFTP Server stopped")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping SFTP server", e)
+        } finally {
+            sessionPolicy = null
+            sshd = null
+            activeSessions.clear()
+            _connectionCount.value = 0
         }
     }
 

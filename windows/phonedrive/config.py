@@ -1,7 +1,10 @@
 import json
 import os
-import base64
+import logging
+import tempfile
+import threading
 from dataclasses import dataclass, asdict
+from . import credentials
 
 @dataclass
 class SavedDevice:
@@ -22,6 +25,7 @@ class Config:
         return cls._instance
 
     def _init(self):
+        self._lock = threading.RLock()
         self.appdata_dir = os.path.join(os.environ.get('APPDATA', ''), 'PhoneDrive')
         os.makedirs(self.appdata_dir, exist_ok=True)
         self.config_path = os.path.join(self.appdata_dir, 'config.json')
@@ -36,29 +40,17 @@ class Config:
 
         self.load()
 
-    def _obfuscate(self, text: str) -> str:
-        key = 0xAA
-        return base64.b64encode(bytes([b ^ key for b in text.encode('utf-8')])).decode('utf-8')
-
-    def _deobfuscate(self, obfuscated: str) -> str:
-        try:
-            key = 0xAA
-            decoded = base64.b64decode(obfuscated)
-            return bytes([b ^ key for b in decoded]).decode('utf-8')
-        except Exception:
-            return ""
-
     def encrypt_password(self, password: str) -> str:
-        return self._obfuscate(password)
+        return credentials.protect(password)
 
     def decrypt_password(self, password_encrypted: str) -> str:
-        return self._deobfuscate(password_encrypted)
+        return credentials.unprotect(password_encrypted)
 
     def load(self):
         if not os.path.exists(self.config_path):
             return
         try:
-            with open(self.config_path, 'r') as f:
+            with self._lock, open(self.config_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 self.default_drive_letter = data.get('default_drive_letter', self.default_drive_letter)
                 self.auto_mount = data.get('auto_mount', self.auto_mount)
@@ -70,20 +62,41 @@ class Config:
                 self.saved_devices = []
                 for d in devices_data:
                     self.saved_devices.append(SavedDevice(**d))
-        except Exception as e:
-            print(f"Error loading config: {e}")
+            if any(not d.password_encrypted.startswith(credentials.PREFIX) for d in self.saved_devices):
+                self.save()
+        except Exception:
+            logging.getLogger(__name__).exception("Unable to load or migrate saved configuration")
 
     def save(self):
+        with self._lock:
+            self._save()
+
+    def _save(self):
+        devices = []
+        for device in self.saved_devices:
+            data = asdict(device)
+            if not device.password_encrypted.startswith(credentials.PREFIX):
+                data['password_encrypted'] = self.encrypt_password(self.decrypt_password(device.password_encrypted))
+            devices.append(data)
         data = {
             'default_drive_letter': self.default_drive_letter,
             'auto_mount': self.auto_mount,
             'theme': self.theme,
             'window_geometry': self.window_geometry,
             'minimize_to_tray': self.minimize_to_tray,
-            'saved_devices': [asdict(d) for d in self.saved_devices]
+            'saved_devices': devices
         }
+        temporary = None
         try:
-            with open(self.config_path, 'w') as f:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=self.appdata_dir,
+                                             prefix='config-', suffix='.tmp', delete=False) as f:
+                temporary = f.name
                 json.dump(data, f, indent=4)
-        except Exception as e:
-            print(f"Error saving config: {e}")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, self.config_path)
+            for device, stored in zip(self.saved_devices, devices):
+                device.password_encrypted = stored['password_encrypted']
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)

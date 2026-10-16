@@ -1,11 +1,16 @@
+"""mDNS is a directory, not a heartbeat for an established SSH connection."""
+import logging
 import threading
 import time
-import socket
 from dataclasses import dataclass
 from typing import Callable
-from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
+from zeroconf import IPVersion, ServiceBrowser, ServiceListener, Zeroconf
 
-@dataclass
+log = logging.getLogger(__name__)
+SERVICE_TYPE = "_sftp-ssh._tcp.local."
+
+
+@dataclass(frozen=True)
 class DeviceInfo:
     name: str
     ip: str
@@ -13,101 +18,72 @@ class DeviceInfo:
     hostname: str
     last_seen: float
 
+
 class DeviceDiscovery(ServiceListener):
     def __init__(self):
-        self.zeroconf: Zeroconf | None = None
-        self.browser: ServiceBrowser | None = None
+        self.zeroconf = None
+        self.browser = None
         self.devices: dict[str, DeviceInfo] = {}
-        
         self.on_device_found: Callable[[DeviceInfo], None] | None = None
         self.on_device_lost: Callable[[str], None] | None = None
-        
         self.scanning = False
         self._lock = threading.Lock()
-        self._monitor_thread = None
 
     def start_scanning(self):
         if self.scanning:
             return
-            
+        self.zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
         self.scanning = True
-        self.zeroconf = Zeroconf()
-        self.browser = ServiceBrowser(self.zeroconf, "_sftp-ssh._tcp.local.", self)
-        
-        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        self._monitor_thread.start()
+        try:
+            self.browser = ServiceBrowser(self.zeroconf, SERVICE_TYPE, self)
+        except Exception:
+            self.stop_scanning()
+            raise
 
     def stop_scanning(self):
         self.scanning = False
-        if self.zeroconf:
-            self.zeroconf.close()
-            self.zeroconf = None
-        if self.browser:
-            self.browser.cancel()
-            self.browser = None
+        browser, zc = self.browser, self.zeroconf
+        self.browser = self.zeroconf = None
+        if browser:
+            browser.cancel()
+        if zc:
+            zc.close()
         with self._lock:
             self.devices.clear()
 
-    def _monitor_loop(self):
-        while self.scanning:
-            current_time = time.time()
-            to_remove = []
-            with self._lock:
-                for name, info in self.devices.items():
-                    if current_time - info.last_seen > 60:
-                        to_remove.append(name)
-                        
-                for name in to_remove:
-                    del self.devices[name]
-                    
-            for name in to_remove:
-                if self.on_device_lost:
-                    self.on_device_lost(name)
-                    
-            time.sleep(5)
-
-    def remove_service(self, zc: Zeroconf, type_: str, name: str) -> None:
-        friendly_name = name.replace("." + type_, "")
+    def remove_service(self, zc, type_, name):
+        if not self.scanning or zc is not self.zeroconf:
+            return
+        friendly_name = name.removesuffix("." + type_)
         with self._lock:
-            if friendly_name in self.devices:
-                del self.devices[friendly_name]
-        if self.on_device_lost:
+            removed = self.devices.pop(friendly_name, None)
+        if removed and self.on_device_lost:
             self.on_device_lost(friendly_name)
 
-    def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
-        info = zc.get_service_info(type_, name)
-        if not info:
+    def add_service(self, zc, type_, name):
+        if not self.scanning or zc is not self.zeroconf:
             return
-            
-        friendly_name = name.replace("." + type_, "")
-        
-        addresses = [socket.inet_ntoa(addr) for addr in info.addresses]
-        if not addresses:
-            return
-            
-        ip = addresses[0]
-        port = info.port
-        hostname = info.server
-        
-        device = DeviceInfo(
-            name=friendly_name,
-            ip=ip,
-            port=port,
-            hostname=hostname,
-            last_seen=time.time()
-        )
-        
-        with self._lock:
-            self.devices[friendly_name] = device
-            
-        if self.on_device_found:
-            self.on_device_found(device)
+        try:
+            info = zc.get_service_info(type_, name, timeout=2000)
+            if not info:
+                return
+            addresses = info.parsed_addresses(IPVersion.V4Only)
+            if not addresses or not 1 <= info.port <= 65535:
+                return
+            device = DeviceInfo(name.removesuffix("." + type_), addresses[0],
+                                info.port, info.server or "", time.monotonic())
+            with self._lock:
+                if not self.scanning or zc is not self.zeroconf:
+                    return
+                self.devices[device.name] = device
+            if self.on_device_found:
+                self.on_device_found(device)
+        except Exception:
+            log.exception("Unable to resolve discovered device")
 
-    def update_service(self, zc: Zeroconf, type_: str, name: str) -> None:
-        # Same as add
+    def update_service(self, zc, type_, name):
         self.add_service(zc, type_, name)
 
     def manual_refresh(self):
         self.stop_scanning()
-        time.sleep(0.5)
         self.start_scanning()

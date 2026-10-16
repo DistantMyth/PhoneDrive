@@ -5,6 +5,7 @@ from typing import Dict, Any
 from .discovery import DeviceDiscovery, DeviceInfo
 from .mount_manager import MountManager
 from .config import Config
+from .background import BackgroundService
 
 class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, parent, config, *args, **kwargs):
@@ -117,6 +118,7 @@ class MainApp(ctk.CTk):
         self.config = Config()
         self.mount_manager = MountManager()
         self.discovery = DeviceDiscovery()
+        self.monitor = BackgroundService(self.config, self.mount_manager, self.discovery)
         
         self.title("PhoneDrive")
         self.geometry("900x650")
@@ -150,6 +152,7 @@ class MainApp(ctk.CTk):
         
         # Start scanning
         self.discovery.start_scanning()
+        self.monitor.start_worker()
         self.update_mounts_loop()
         
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -287,6 +290,7 @@ class MainApp(ctk.CTk):
         ManualConnectDialog(self, self.handle_manual_connect)
 
     def handle_manual_connect(self, ip, port, user, pwd, drive):
+        self.selected_device = DeviceInfo(f"{user}@{ip}:{port}", ip, int(port), "", time.monotonic())
         self.ip_var.set(ip)
         self.port_var.set(str(port))
         self.user_var.set(user)
@@ -303,14 +307,19 @@ class MainApp(ctk.CTk):
         self.after(2000, lambda: self.scan_indicator.configure(text="Scanning..."))
 
     def on_device_found(self, device: DeviceInfo):
+        self.monitor.on_device_found(device)
         self.after(0, self._add_device_card, device)
 
     def on_device_lost(self, name: str):
+        self.monitor.on_device_lost(name)
         self.after(0, self._remove_device_card, name)
 
     def _add_device_card(self, device: DeviceInfo):
         if device.name in self.devices:
-            return
+            # Replace the old card and its captured Select callback after an IP change.
+            self._remove_device_card(device.name)
+            if self.selected_device and self.selected_device.name == device.name:
+                self.select_device(device)
             
         card = ctk.CTkFrame(self.devices_scroll, fg_color=("white", "gray17"), corner_radius=10, border_width=1, border_color=("gray80", "gray25"))
         card.pack(fill="x", pady=5, padx=5)
@@ -382,7 +391,11 @@ class MainApp(ctk.CTk):
 
     def do_mount(self):
         ip = self.ip_var.get()
-        port = int(self.port_var.get())
+        try:
+            port = int(self.port_var.get())
+        except ValueError:
+            self.status_label.configure(text="Enter a valid port number.")
+            return
         user = self.user_var.get()
         pwd = self.pass_var.get()
         drive = self.drive_var.get()
@@ -392,11 +405,11 @@ class MainApp(ctk.CTk):
         
         def mount_thread():
             success, msg = self.mount_manager.mount(ip, port, user, pwd, drive)
-            self.after(0, self.mount_finished, success, msg, drive)
+            self.after(0, self.mount_finished, success, msg, drive, ip, port, user, pwd)
             
         threading.Thread(target=mount_thread, daemon=True).start()
 
-    def mount_finished(self, success, msg, drive):
+    def mount_finished(self, success, msg, drive, ip, port, user, pwd):
         self.mount_btn.configure(state="normal")
         if success:
             self.status_label.configure(text=f"Successfully mounted to {drive}:")
@@ -408,10 +421,10 @@ class MainApp(ctk.CTk):
                 from .config import SavedDevice
                 sd = SavedDevice(
                     name=self.selected_device.name,
-                    ip=self.selected_device.ip,
-                    port=self.selected_device.port,
-                    username=self.user_var.get(),
-                    password_encrypted=self.config.encrypt_password(self.pass_var.get()),
+                    ip=ip,
+                    port=port,
+                    username=user,
+                    password_encrypted=self.config.encrypt_password(pwd),
                     drive_letter=drive
                 )
                 
@@ -425,6 +438,7 @@ class MainApp(ctk.CTk):
                 if not found:
                     self.config.saved_devices.append(sd)
                 self.config.save()
+                self.monitor.track(sd)
         else:
             self.status_label.configure(text=f"Mount failed: {msg}")
             # Show error dialog?
@@ -434,6 +448,7 @@ class MainApp(ctk.CTk):
         self.status_label.configure(text="Unmounting...")
         
         def unmount_thread():
+            self.monitor.untrack_drive(drive)
             success = self.mount_manager.unmount(drive)
             self.after(0, self.unmount_finished, success, drive)
             
@@ -450,6 +465,7 @@ class MainApp(ctk.CTk):
     def unmount_all(self):
         mounts = self.mount_manager.get_mounted_drives()
         for m in mounts:
+            self.monitor.untrack_drive(m.drive_letter)
             self.mount_manager.unmount(m.drive_letter)
         self.refresh_mounts_list()
         self.check_mount_status()
@@ -468,7 +484,7 @@ class MainApp(ctk.CTk):
             ctk.CTkLabel(frame, text=m.remote_path, text_color="gray").pack(side="left", padx=10)
             
             ctk.CTkButton(frame, text="Eject", width=60, height=24, fg_color="transparent", border_width=1, text_color=self.error_color,
-                         command=lambda d=m.drive_letter: self.mount_manager.unmount(d) or self.refresh_mounts_list()).pack(side="right", padx=5)
+                         command=lambda d=m.drive_letter: self.eject_drive(d)).pack(side="right", padx=5)
                          
             ctk.CTkButton(frame, text="Open", width=60, height=24, 
                          command=lambda d=m.drive_letter: self.mount_manager.open_in_explorer(d)).pack(side="right", padx=5)
@@ -477,6 +493,13 @@ class MainApp(ctk.CTk):
         self.refresh_mounts_list()
         self.check_mount_status()
         self.after(5000, self.update_mounts_loop)
+
+    def eject_drive(self, drive):
+        def task():
+            self.monitor.untrack_drive(drive)
+            success = self.mount_manager.unmount(drive)
+            self.after(0, self.unmount_finished, success, drive)
+        threading.Thread(target=task, daemon=True).start()
 
     def on_close(self):
         self.config.window_geometry = self.geometry()
@@ -517,6 +540,7 @@ class MainApp(ctk.CTk):
         self.after(0, self.quit_app)
 
     def quit_app(self):
+        self.monitor.stop_worker()
         self.discovery.stop_scanning()
         self.destroy()
         import os
