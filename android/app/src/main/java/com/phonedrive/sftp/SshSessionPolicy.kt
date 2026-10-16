@@ -2,7 +2,7 @@ package com.phonedrive.sftp
 
 import org.apache.sshd.common.session.Session
 import org.apache.sshd.common.session.SessionListener
-import org.apache.sshd.common.util.buffer.ByteArrayBuffer
+import org.apache.sshd.common.SshConstants
 import org.apache.sshd.core.CoreModuleProperties
 import org.apache.sshd.server.SshServer
 import java.time.Duration
@@ -33,7 +33,10 @@ class SshSessionPolicy(
                     if (!session.isOpen) return@scheduleWithFixedDelay
                     try {
                         // Both SUCCESS and FAILURE are replies proving the peer is alive.
-                        session.request("keepalive@openssh.com", ByteArrayBuffer(), replyTimeout)
+                        val packet = session.createBuffer(SshConstants.SSH_MSG_GLOBAL_REQUEST)
+                        packet.putString("keepalive@openssh.com")
+                        packet.putBoolean(true)
+                        session.request("keepalive@openssh.com", packet, replyTimeout)
                         misses = 0
                     } catch (_: Exception) {
                         misses++

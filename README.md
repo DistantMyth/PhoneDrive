@@ -39,7 +39,9 @@ A Windows application built with Python and CustomTkinter.
 - Open the app, grant the requested "All Files Access" permission, and tap the big power button to start the server.
 
 ### 2. Windows App
-The Windows application requires Python 3.10+ and a few system prerequisites.
+Download and run `PhoneDrive-Setup-<version>.exe` from [Releases](https://github.com/DistantMyth/PhoneDrive/releases/latest). Python is bundled. Future installers upgrade the same installation and preserve your saved devices. You can uninstall it through Windows Installed Apps.
+
+When switching from a ZIP release, exit the old copy's tray icon before using the installed version. See [Windows installation and build instructions](windows/README.md).
 
 #### Prerequisites
 - Install **WinFsp** and **SSHFS-Win**.
@@ -49,7 +51,7 @@ The Windows application requires Python 3.10+ and a few system prerequisites.
     winget install -e --id SSHFS-Win.SSHFS-Win
     ```
 
-#### Running the App
+#### Running from Source (Python 3.10+)
 1. Navigate to the `windows` directory.
 2. Install the required Python packages:
    ```cmd

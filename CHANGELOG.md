@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.1
+
+- Replace the Windows ZIP release with a versioned installer, Start menu shortcuts, an Installed Apps entry, in-place upgrades, and an uninstaller that preserves saved settings.
+- Add Windows executable version metadata, single-instance protection, and downgrade prevention.
+- Fix the Android power-button crash by initializing SSHD's Android runtime hooks before crypto initialization and using Android's default cryptographic providers.
+- Report SSH runtime linkage failures as startup errors instead of terminating the app process.
+- Correct the SSH global-request keepalive packet so idle clients remain connected.
+- Add a device test for crypto initialization, authentication, and server restart on Android.
+
 ## 1.1.0
 
 - Keep the Windows mount recovery worker alive through screen-off, mDNS gaps, endpoint outages, and disconnected drive mappings.

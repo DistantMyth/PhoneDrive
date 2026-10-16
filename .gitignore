@@ -64,6 +64,7 @@ windows/ENV/
 
 # Installer build specific
 windows/*.exe
+windows/*.spec
 
 # Root level debug APKs built during development
 *.apk

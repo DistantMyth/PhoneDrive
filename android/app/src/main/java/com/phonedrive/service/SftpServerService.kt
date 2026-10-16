@@ -142,6 +142,8 @@ class SftpServerService : Service() {
                         refreshNetworkAndPower()
                     }
                 }
+            } catch (error: LinkageError) {
+                handler.post { if (!destroyed) failStart(IllegalStateException("SSH runtime initialization failed", error)) }
             } catch (error: Exception) {
                 handler.post { if (!destroyed) failStart(error) }
             }

@@ -1,8 +1,9 @@
 from setuptools import setup, find_packages
+from phonedrive import __version__
 
 setup(
     name="phonedrive",
-    version="1.1.0",
+    version=__version__,
     packages=find_packages(),
     install_requires=[
         "customtkinter>=5.2.0",
